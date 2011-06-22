@@ -31,7 +31,6 @@
 
 #ifdef  JON_MOD
 
-#define JON_SMBUS_BROKEN
 #define JON_DATASHEET
 #define I2C_M_WRITE 0
 
@@ -43,34 +42,24 @@
  * Defines
  */
 
+// Commands for reading data
 #define HMC6343_POST_ACCEL_DATA     0x40
 #define HMC6343_POST_MAG_DATA       0x45
 #define HMC6343_POST_HEADING_DATA      0x50
 #define HMC6343_POST_TILT_DATA      0x55
 
-#ifdef JON_DATASHEET
-// bring into compliance with recent specsheet
-#define HMC6343_USR_CAL_ENTER       0x71
-#else
-#define HMC6343_USR_CAL_ENTER       0x70
-#define HMC6343_USR_CAL2D_ENTER     0x71
-#endif
-
+// Commands for setting the axis orientation
 #define HMC6343_LEVEL_OR        0x72
 #define HMC6343_UPRIGHT_FRONT_OR    0x74
 #define HMC6343_UPRIGHT_EDGE_OR     0x73
-#define HMC6343_RUN_MODE        0x75
-#define HMC6343_STANDBY_MODE        0x76
 
-#ifdef JON_DATASHEET
-// bring into compliance with recent spechsheet
+#define HMC6343_USR_CAL_ENTER       0x71
 #define HMC6343_USR_CAL_EXIT        0x7e
-#else
-#define HMC6343_USR_CAL2D_EXIT      0x7e
-#define HMC6343_USR_CAL_EXIT        0x7f
-#endif
 
 #define HMC6343_RESET           0x82
+
+#define HMC6343_RUN_MODE        0x75
+#define HMC6343_STANDBY_MODE        0x76
 #define HMC6343_ENTER_SLEEP        0x83
 #define HMC6343_EXIT_SLEEP         0x84
 
@@ -82,6 +71,12 @@
 #define        HMC6343_EEPROM_VARIATION_LSB    0x0c
 #define        HMC6343_EEPROM_VARIATION_MSB    0x0d
 
+#define HMC6343_EEPROM_OP_1            0x04
+
+#define HMC6343_ORIENTATION_BITS        0b00000111
+#define HMC6343_LEVEL_OR_BIT    0x1
+#define HMC6343_EDGE_OR_BIT     0x2
+#define HMC6343_FRONT_OR_BIT    0x4
 
 /*
  * Structs
@@ -97,21 +92,21 @@ struct hmc6343_data {
 
 #ifdef JON_SMBUS_BROKEN
 static int hmc6343_send_command(struct i2c_client *client, u8 command) {
-		// array containing the command value for the chip
-		u8 cmd[] = { command };
+    // array containing the command value for the chip
+    u8 cmd[] = { command, 0x00 };
     // an array of message(s) that will be sent on the bus
     struct i2c_msg messageArray[] = {
     //  device address, flags,   length, array with bytes to send
-        { client->addr, I2C_M_WRITE, 1, cmd },
+        { client->addr, I2C_M_WRITE, 2, cmd },
     };
-		int ret;
+        int ret;
     struct hmc6343_data *data = i2c_get_clientdata(client);
     
-		printk("running hmc6343_send_command");
     mutex_lock(&data->access_lock);
 
-		ret = i2c_transfer(client->adapter, messageArray, 1);
-		mdelay(10);
+    printk("running hmc6343_send_command: 0x%x @0x%x\n", command, client->addr);
+    ret = i2c_transfer(client->adapter, messageArray, 1);
+    mdelay(1);
 
     mutex_unlock(&data->access_lock);
 
@@ -119,6 +114,26 @@ static int hmc6343_send_command(struct i2c_client *client, u8 command) {
     
 }
 #endif
+
+// Uses the 0x65 command to acquire the contents of EEPROM register 4.
+// This value is more correct than the value obtained using the EEPROM read command.
+static int hmc6343_read_op_1(struct i2c_client *client, u8 *data) {
+    unsigned char count = 1;
+//    u8 data[count];
+    u8 command = 0x65;
+
+    struct i2c_msg read_command[] = {
+        { client->addr, I2C_M_RD, count, data },
+    };
+    int ret;
+
+    ret = i2c_smbus_write_byte(client, command);
+    if (ret < 0)
+        return ret;
+    
+    ret = i2c_transfer(client->adapter, read_command, count);
+    return ret;
+}
 
 static int hmc6343_read_eeprom(struct i2c_client *client, u8 addr, u8 *data)
 {
@@ -160,18 +175,10 @@ static int hmc6343_set_calibration(struct i2c_client *client, int state)
     int ret;
 
     if (state) {
-        #ifdef JON_SMBUS_BROKEN
-        ret = hmc6343_send_command(client, HMC6343_USR_CAL_ENTER);
-        #else
         ret = i2c_smbus_write_byte(client, HMC6343_USR_CAL_ENTER);
-        #endif
         udelay(300);
     } else {
-        #ifdef JON_SMBUS_BROKEN
-        ret = hmc6343_send_command(client, HMC6343_USR_CAL_EXIT);
-        #else
         ret = i2c_smbus_write_byte(client, HMC6343_USR_CAL_EXIT);
-        #endif
         mdelay(3);
     }
 
@@ -181,9 +188,10 @@ static int hmc6343_set_calibration(struct i2c_client *client, int state)
     return 0;
 }
 
+#ifndef JON_DATASHEET
 static int hmc6343_set_calibration_2d(struct i2c_client *client, int state)
 {
-/*    int ret;
+    int ret;
 
     if (state) {
         ret = i2c_smbus_write_byte(client, HMC6343_USR_CAL2D_ENTER);
@@ -195,9 +203,10 @@ static int hmc6343_set_calibration_2d(struct i2c_client *client, int state)
 
     if (ret < 0)
         return ret;
-*/
+
     return 0;
 }
+#endif
 
 static int hmc6343_get_angle(struct i2c_client *client, u8 type, s16 *v)
 {
@@ -415,6 +424,27 @@ exit:
 static DEVICE_ATTR(variation, S_IWUSR | S_IRUGO,
            hmc6343_show_variation, hmc6343_store_variation);
 
+static ssize_t hmc6343_show_calibration(struct device *dev,
+             struct device_attribute *attr, char *buf)
+{
+    struct i2c_client *client = to_i2c_client(dev);
+    u8 op_1;
+    hmc6343_read_op_1(client, &op_1);
+
+    switch (op_1 & 0b01000000) {
+    case 0:
+        return sprintf(buf, " enter [exit]\n");
+        break;
+    case 64:
+        return sprintf(buf, "[enter] exit\n");
+        break;
+    default:
+        return sprintf(buf, "unknown calibration state: OP_1 = 0x%x\n", op_1);
+        break;
+    }
+    return sprintf(buf, "Escaping the switch without returning is impossible.\n");
+}
+
 static ssize_t hmc6343_store_calibration(struct device *dev,
          struct device_attribute *attr, const char *buf, size_t count)
 {
@@ -436,31 +466,32 @@ static ssize_t hmc6343_store_calibration(struct device *dev,
     return count;
 }
 
-static DEVICE_ATTR(calibration, S_IWUSR, NULL, hmc6343_store_calibration);
+static DEVICE_ATTR(calibration, S_IWUSR | S_IRUGO, 
+        hmc6343_show_calibration, hmc6343_store_calibration);
 
-static ssize_t hmc6343_store_calibration_2d(struct device *dev,
-         struct device_attribute *attr, const char *buf, size_t count)
+static ssize_t hmc6343_show_orientation(struct device *dev,
+             struct device_attribute *attr, char *buf)
 {
     struct i2c_client *client = to_i2c_client(dev);
-    int state;
-    int ret;
+    u8 op_1;
+    hmc6343_read_op_1(client, &op_1);
 
-    if (strncmp(buf, "enter", 5) == 0)
-        state = 1;
-    else if (strncmp(buf, "exit", 4) == 0)
-        state = 0;
-    else
-        return -EINVAL;
-
-    ret = hmc6343_set_calibration_2d(client, state);
-    if (ret < 0)
-        return ret;
-
-    return count;
+    switch (op_1 & 0b00000111) {
+    case 1:
+        return sprintf(buf, "[level] edge  front\n");
+        break;
+    case 2:
+        return sprintf(buf, " level [edge] front\n");
+        break;
+    case 4:
+        return sprintf(buf, " level  edge [front]\n");
+        break;
+    default:
+        return sprintf(buf, "unknown orientation: OP_1 = 0x%x\n", op_1);
+        break;
+    }
+    return sprintf(buf, "Escaping the switch without returning is impossible.\n");
 }
-
-static DEVICE_ATTR(calibration_2d, S_IWUSR, NULL, 
-hmc6343_store_calibration_2d);
 
 static ssize_t hmc6343_store_orientation(struct device *dev,
          struct device_attribute *attr, const char *buf, size_t count)
@@ -469,7 +500,6 @@ static ssize_t hmc6343_store_orientation(struct device *dev,
     u8 or;
     int ret;
 
-		printk("hmc6343: running store_orientation, input: \"%s\"", buf);
     if (strncmp(buf, "level", 5) == 0)
         or = HMC6343_LEVEL_OR;
     else if (strncmp(buf, "front", 5) == 0)
@@ -479,11 +509,7 @@ static ssize_t hmc6343_store_orientation(struct device *dev,
     else
         return -EINVAL;
     
-    #ifdef JON_SMBUS_BROKEN
-    ret = hmc6343_send_command(client, or);
-    #else
     ret = i2c_smbus_write_byte(client, or);
-    #endif
     
     if (ret < 0)
         return ret;
@@ -493,7 +519,28 @@ static ssize_t hmc6343_store_orientation(struct device *dev,
     return count;
 }
 
-static DEVICE_ATTR(orientation, S_IWUSR, NULL, hmc6343_store_orientation);
+static DEVICE_ATTR(orientation, S_IWUSR | S_IRUGO, hmc6343_show_orientation, hmc6343_store_orientation);
+
+static ssize_t hmc6343_show_mode(struct device *dev,
+             struct device_attribute *attr, char *buf)
+{
+    struct i2c_client *client = to_i2c_client(dev);
+    u8 op_1;
+    hmc6343_read_op_1(client, &op_1);
+
+    switch (op_1 & 0b00011000) {
+    case 8:
+        return sprintf(buf, " run [standby]\n");
+        break;
+    case 16:
+        return sprintf(buf, "[run] standby\n");
+        break;
+    default:
+        return sprintf(buf, "unknown mode: OP_1 = 0x%x\n", op_1);
+        break;
+    }
+    return sprintf(buf, "Escaping the switch without returning is impossible.\n");
+}
 
 static ssize_t hmc6343_store_mode(struct device *dev,
          struct device_attribute *attr, const char *buf, size_t count)
@@ -506,28 +553,27 @@ static ssize_t hmc6343_store_mode(struct device *dev,
         mode = HMC6343_RUN_MODE;
     else if (strncmp(buf, "standby", 7) == 0)
         mode = HMC6343_STANDBY_MODE;
-    else if (strncmp(buf, "SLEEP", 5) == 0) /* FIXME: REMOVE ME */
-        mode = HMC6343_ENTER_SLEEP;
-    else if (strncmp(buf, "WAKE", 4) == 0) /* FIXME: REMOVE ME */
-        mode = HMC6343_EXIT_SLEEP;
     else
         return -EINVAL;
     
-    #ifdef JON_SMBUS_BROKEN
-    ret = hmc6343_send_command(client, mode);
-    #else
     ret = i2c_smbus_write_byte(client, mode);
-    #endif
     
     if (ret < 0)
         return ret;
 
     udelay(300);
 
-    return count;
+    return ret;
 }
 
-static DEVICE_ATTR(mode, S_IWUSR, NULL, hmc6343_store_mode);
+static DEVICE_ATTR(mode, S_IWUSR | S_IRUGO, 
+        hmc6343_show_mode, hmc6343_store_mode);
+
+static ssize_t hmc6343_show_reset(struct device *dev,
+             struct device_attribute *attr, char *buf)
+{
+    return sprintf(buf, "valid inputs: 1 \n");
+}
 
 static ssize_t hmc6343_store_reset(struct device *dev,
          struct device_attribute *attr, const char *buf, size_t count)
@@ -539,11 +585,9 @@ static ssize_t hmc6343_store_reset(struct device *dev,
     ret = strict_strtoul(buf, 10, &val);
     if (ret || val != 1)
         return -EINVAL;
-    #ifdef JON_SMBUS_BROKEN
-    ret = hmc6343_send_command(client, HMC6343_RESET);
-    #else
+
     ret = i2c_smbus_write_byte(client, HMC6343_RESET);
-    #endif
+
     if (ret < 0)
         return ret;
 
@@ -552,7 +596,7 @@ static ssize_t hmc6343_store_reset(struct device *dev,
     return count;
 }
 
-static DEVICE_ATTR(reset, S_IWUSR, NULL, hmc6343_store_reset);
+static DEVICE_ATTR(reset, S_IWUSR | S_IRUGO, hmc6343_show_reset, hmc6343_store_reset);
 
 static ssize_t hmc6343_store_sleep(struct device *dev,
          struct device_attribute *attr, const char *buf, size_t count)
@@ -562,22 +606,14 @@ static ssize_t hmc6343_store_sleep(struct device *dev,
     int ret;
 
     ret = strict_strtoul(buf, 10, &val);
-    if (ret || val != 0 || val != 1)
+    if ( ret || ((val != 0) && (val != 1)))
         return -EINVAL;
 
     if (val) {
-        #ifdef JON_SMBUS_BROKEN
-        ret = hmc6343_send_command(client, HMC6343_ENTER_SLEEP);
-        #else
         ret = i2c_smbus_write_byte(client, HMC6343_ENTER_SLEEP);
-        #endif
         mdelay(1);
     } else {
-        #ifdef JON_SMBUS_BROKEN
-        ret = hmc6343_send_command(client, HMC6343_EXIT_SLEEP);
-        #else
         ret = i2c_smbus_write_byte(client, HMC6343_EXIT_SLEEP);
-        #endif
         mdelay(20);
     }
 
@@ -660,7 +696,6 @@ static struct attribute *hmc6343_attributes[] = {
     &dev_attr_deviation.attr,
     &dev_attr_variation.attr,
     &dev_attr_calibration.attr,
-    &dev_attr_calibration_2d.attr,
     &dev_attr_orientation.attr,
     &dev_attr_mode.attr,
     &dev_attr_reset.attr,
