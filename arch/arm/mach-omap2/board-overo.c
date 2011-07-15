@@ -498,11 +498,20 @@ static struct twl4030_platform_data overo_twldata = {
 	.vpll2		= &overo_vpll2,
 };
 
+// Declarations of devices on i2c buss 3
+static struct i2c_board_info __initdata overo_i2c_boardinfo_i2c_3[] = {
+	{
+		// arguments: module name, I2C address
+		I2C_BOARD_INFO("hmc6343", 0x19),
+	},
+};
+
 static int __init overo_i2c_init(void)
 {
 	omap3_pmic_init("tps65950", &overo_twldata);
 	/* i2c2 pins are used for gpio */
-	omap_register_i2c_bus(3, 400, NULL, 0);
+	omap_register_i2c_bus(3, 400, overo_i2c_boardinfo_i2c_3, 
+			ARRAY_SIZE(overo_i2c_boardinfo_i2c_3));
 	return 0;
 }
 
