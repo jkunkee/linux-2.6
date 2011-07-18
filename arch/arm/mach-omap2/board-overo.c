@@ -510,7 +510,7 @@ static int __init overo_i2c_init(void)
 {
 	omap3_pmic_init("tps65950", &overo_twldata);
 	/* i2c2 pins are used for gpio */
-	omap_register_i2c_bus(3, 400, overo_i2c_boardinfo_i2c_3, 
+	omap_register_i2c_bus(3, 400, overo_i2c_boardinfo_i2c_3,
 			ARRAY_SIZE(overo_i2c_boardinfo_i2c_3));
 	return 0;
 }
