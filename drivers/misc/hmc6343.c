@@ -19,22 +19,18 @@
  *  Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
  */
 
+/*
+ * TODO for this driver:
+ *  Measurement rate show/set (including change the op_1 function)
+ *  Test sleep mode
+ */
+
 #include <linux/module.h>
 #include <linux/init.h>
 #include <linux/slab.h>
 #include <linux/i2c.h>
 #include <linux/mutex.h>
 #include <linux/delay.h>
-
-
-#define JON_MOD
-
-#ifdef  JON_MOD
-
-#define JON_DATASHEET
-#define I2C_M_WRITE 0
-
-#endif
 
 #define DRIVER_VERSION      "1.0.0"
 
@@ -45,38 +41,50 @@
 // Commands for reading data
 #define HMC6343_POST_ACCEL_DATA     0x40
 #define HMC6343_POST_MAG_DATA       0x45
-#define HMC6343_POST_HEADING_DATA      0x50
+#define HMC6343_POST_HEADING_DATA   0x50
 #define HMC6343_POST_TILT_DATA      0x55
 
 // Commands for setting the axis orientation
-#define HMC6343_LEVEL_OR        0x72
+#define HMC6343_LEVEL_OR            0x72
 #define HMC6343_UPRIGHT_FRONT_OR    0x74
 #define HMC6343_UPRIGHT_EDGE_OR     0x73
 
 #define HMC6343_USR_CAL_ENTER       0x71
 #define HMC6343_USR_CAL_EXIT        0x7e
 
-#define HMC6343_RESET           0x82
+#define HMC6343_RESET               0x82
 
-#define HMC6343_RUN_MODE        0x75
+#define HMC6343_RUN_MODE            0x75
 #define HMC6343_STANDBY_MODE        0x76
-#define HMC6343_ENTER_SLEEP        0x83
-#define HMC6343_EXIT_SLEEP         0x84
+#define HMC6343_ENTER_SLEEP         0x83
+#define HMC6343_EXIT_SLEEP          0x84
 
-#define HMC6343_EEPROM_READ        0xe1
+#define HMC6343_EEPROM_READ         0xe1
 #define HMC6343_EEPROM_WRITE        0xf1
 
-#define        HMC6343_EEPROM_DEVIATION_LSB    0x0a
-#define        HMC6343_EEPROM_DEVIATION_MSB    0x0b
-#define        HMC6343_EEPROM_VARIATION_LSB    0x0c
-#define        HMC6343_EEPROM_VARIATION_MSB    0x0d
+#define HMC6343_EEPROM_DEVIATION_LSB    0x0a
+#define HMC6343_EEPROM_DEVIATION_MSB    0x0b
+#define HMC6343_EEPROM_VARIATION_LSB    0x0c
+#define HMC6343_EEPROM_VARIATION_MSB    0x0d
 
-#define HMC6343_EEPROM_OP_1            0x04
+#define HMC6343_EEPROM_OP_1         0x04
 
-#define HMC6343_ORIENTATION_BITS        0b00000111
-#define HMC6343_LEVEL_OR_BIT    0x1
-#define HMC6343_EDGE_OR_BIT     0x2
-#define HMC6343_FRONT_OR_BIT    0x4
+#define HMC6343_ORIENTATION_BITS    0x07
+#define HMC6343_LEVEL_OR_BIT        0x01
+#define HMC6343_EDGE_OR_BIT         0x02
+#define HMC6343_FRONT_OR_BIT        0x04
+
+/*
+ * Note that all bits of OP_2 except these must be 
+ * clear for proper operation, so each of these
+ * values may be written to the register unmasked.
+ */
+#define HMC6343_EEPROM_OP_2         0x05
+
+#define HMC6343_RATE_BITS           0X03
+#define HMC6343_1_HZ                0x00
+#define HMC6343_5_HZ                0x01
+#define HMC6343_10_HZ               0x02
 
 /*
  * Structs
@@ -90,36 +98,11 @@ struct hmc6343_data {
  * Management functions
  */
 
-#ifdef JON_SMBUS_BROKEN
-static int hmc6343_send_command(struct i2c_client *client, u8 command) {
-    // array containing the command value for the chip
-    u8 cmd[] = { command, 0x00 };
-    // an array of message(s) that will be sent on the bus
-    struct i2c_msg messageArray[] = {
-    //  device address, flags,   length, array with bytes to send
-        { client->addr, I2C_M_WRITE, 2, cmd },
-    };
-        int ret;
-    struct hmc6343_data *data = i2c_get_clientdata(client);
-    
-    mutex_lock(&data->access_lock);
-
-    printk("running hmc6343_send_command: 0x%x @0x%x\n", command, client->addr);
-    ret = i2c_transfer(client->adapter, messageArray, 1);
-    mdelay(1);
-
-    mutex_unlock(&data->access_lock);
-
-    return ret;
-    
-}
-#endif
-
-// Uses the 0x65 command to acquire the contents of EEPROM register 4.
-// This value is more correct than the value obtained using the EEPROM read command.
+// Uses the 0x65 command to acquire the current contents of the status 
+//  register (EEPROM 0x4). This is the live value, as opposed to the 
+//  boot default value accessed using the EEPROM read command.
 static int hmc6343_read_op_1(struct i2c_client *client, u8 *data) {
     unsigned char count = 1;
-//    u8 data[count];
     u8 command = 0x65;
 
     struct i2c_msg read_command[] = {
@@ -139,7 +122,7 @@ static int hmc6343_read_eeprom(struct i2c_client *client, u8 addr, u8 *data)
 {
     u8 cmd[] = { HMC6343_EEPROM_READ, addr };
     struct i2c_msg msg1[] = {
-        { client->addr, I2C_M_WRITE, 2, cmd },
+        { client->addr, 0, 2, cmd },
     };
     struct i2c_msg msg2[] = {
         { client->addr, I2C_M_RD, 1, data },
@@ -188,26 +171,6 @@ static int hmc6343_set_calibration(struct i2c_client *client, int state)
     return 0;
 }
 
-#ifndef JON_DATASHEET
-static int hmc6343_set_calibration_2d(struct i2c_client *client, int state)
-{
-    int ret;
-
-    if (state) {
-        ret = i2c_smbus_write_byte(client, HMC6343_USR_CAL2D_ENTER);
-        udelay(300);
-    } else {
-        ret = i2c_smbus_write_byte(client, HMC6343_USR_CAL2D_EXIT);
-        mdelay(3);
-    }
-
-    if (ret < 0)
-        return ret;
-
-    return 0;
-}
-#endif
-
 static int hmc6343_get_angle(struct i2c_client *client, u8 type, s16 *v)
 {
     struct hmc6343_data *data = i2c_get_clientdata(client);
@@ -245,6 +208,7 @@ exit:
  * SysFS support
  */
 
+// TODO: print the EEPROM contents as readable hex?
 static ssize_t hmc6343_show_eeprom(struct device *dev,
         struct device_attribute *attr, char *buf)
 {
@@ -286,6 +250,9 @@ static ssize_t hmc6343_store_eeprom(struct device *dev,
          * Note that we also skip address 0x00 since it's used
          * to update the device's slave address and the driver
          * cannot manage an address modification...
+         * 
+         * Also note that register 4 can be written to set
+         * the orientation at power on.
          */
         if (addr == 0 || \
              addr == 1 || addr == 3 /*|| addr == 4*/)
@@ -572,7 +539,7 @@ static DEVICE_ATTR(mode, S_IWUSR | S_IRUGO,
 static ssize_t hmc6343_show_reset(struct device *dev,
              struct device_attribute *attr, char *buf)
 {
-    return sprintf(buf, "valid inputs: 1 \n");
+    return sprintf(buf, "valid input: 1 \n");
 }
 
 static ssize_t hmc6343_store_reset(struct device *dev,
@@ -597,6 +564,20 @@ static ssize_t hmc6343_store_reset(struct device *dev,
 }
 
 static DEVICE_ATTR(reset, S_IWUSR | S_IRUGO, hmc6343_show_reset, hmc6343_store_reset);
+
+static ssize_t hmc6343_show_sleep(struct device *dev,
+             struct device_attribute *attr, char *buf)
+{
+    u8 op_1;
+    hmc6343_read_op_1(client, &op_1);
+
+    // Bits 3 and 4 are the current mode - TODO: test this
+    if (op_1 & 0x18 == 0) {
+        return sprintf(buf, "[1] = enter sleep\n 0  = exit sleep\n");
+    } else {
+        return sprintf(buf, " 1  = enter sleep\n[0] = exit sleep\n");
+    }
+}
 
 static ssize_t hmc6343_store_sleep(struct device *dev,
          struct device_attribute *attr, const char *buf, size_t count)
@@ -623,7 +604,7 @@ static ssize_t hmc6343_store_sleep(struct device *dev,
     return count;
 }
 
-static DEVICE_ATTR(sleep, S_IWUSR, NULL, hmc6343_store_sleep);
+static DEVICE_ATTR(sleep, S_IWUSR | S_IRUGO, hmc6343_show_sleep, hmc6343_store_sleep);
 
 static ssize_t hmc6343_show_accel(struct device *dev,
              struct device_attribute *attr, char *buf)

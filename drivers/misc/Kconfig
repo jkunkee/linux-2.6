@@ -355,11 +355,11 @@ config SENSORS_TSL2550
 	  will be called tsl2550.
 
 config SENSORS_HMC6343
-	tristate "Honeywell 3-Axis digital compass module"
-  depends on EXPERIMENTAL
+	tristate "Honeywell HMC6343 3-Axis digital compass module"
+  depends on EXPERIMENTAL && I2C
   help
-    If you say yes here you get support for the Honeywell 3-Axis
-    digital compass module.
+    If you say yes here you get support for the Honeywell HMC6343
+    3-Axis digital compass/accelerometer module.
 
     This driver can also be built as a module.  If so, the module
     will be called hmc6343.
