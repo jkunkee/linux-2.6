@@ -569,10 +569,11 @@ static ssize_t hmc6343_show_sleep(struct device *dev,
              struct device_attribute *attr, char *buf)
 {
     u8 op_1;
+    struct i2c_client *client = to_i2c_client(dev);
     hmc6343_read_op_1(client, &op_1);
 
     // Bits 3 and 4 are the current mode - TODO: test this
-    if (op_1 & 0x18 == 0) {
+    if ( (op_1 & 0x18) == 0) {
         return sprintf(buf, "[1] = enter sleep\n 0  = exit sleep\n");
     } else {
         return sprintf(buf, " 1  = enter sleep\n[0] = exit sleep\n");
